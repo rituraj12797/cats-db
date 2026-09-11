@@ -13,20 +13,22 @@ type Value interface {
 }
 
 type Node[K Key, V Value] struct {
-	NodeKey   K // key of this node
-	NodeValue V // value of this node
+	NodeKey   K
+	NodeValue V
 
-	NodePointers []*Node[K, V] // array of pointers to node
+	NodePointers []*Node[K, V]
 }
 
-const max_level = 32 // max height of a node in the skip list
+const max_level = 32
 
 type Skiplist[K Key, V Value] struct {
-	start *Node[K, V] // consider start to be the smallest key
-	end   *Node[K, V] // end to be the larget key
+	start *Node[K, V]
+	end   *Node[K, V]
 }
 
 func randomLevel() int {
+	/* generates a random integer which is used to define the height of a new node, based on a coin flip simulation */
+
 	level := 1
 	for rand.Float32() <= 0.5 && level <= max_level {
 		level++
@@ -35,6 +37,7 @@ func randomLevel() int {
 }
 
 func (s *Skiplist[K, V]) search(targetKey K) *Node[K, V] {
+	/* search function: locates a key if it exists in the skiplist */
 
 	currentPointer := s.start
 	var resultPointer *Node[K, V] = nil
@@ -57,12 +60,7 @@ func (s *Skiplist[K, V]) search(targetKey K) *Node[K, V] {
 }
 
 func (s *Skiplist[K, V]) insert(Key K, Value V) *Node[K, V] {
-
-	/*
-	* Find if this key already exists or not
-	* Not found ======>
-	*
-	 */
+	/* insert function: inserts a new node and returns pointer to it */
 
 	if s.search(Key) != nil {
 		return nil
@@ -109,11 +107,45 @@ func (s *Skiplist[K, V]) insert(Key K, Value V) *Node[K, V] {
 	return newNode
 }
 
-func delete() {
+func (s *Skiplist[K, V]) delete(key K) bool {
+	/* delete function: deletes a node from the skiplist and returns true if its succesfully deleted, false otherwise */
 
+	var updateList []*Node[K, V]
+	currentPointer := s.start
+
+	for level := len(s.start.NodePointers) - 1; level >= 0; level-- {
+		nextPointer := currentPointer.NodePointers[level]
+
+		for nextPointer != s.end && nextPointer.NodeKey < key {
+			currentPointer = nextPointer
+			nextPointer = currentPointer.NodePointers[level]
+		}
+		updateList = append(updateList, currentPointer)
+	}
+
+	targetNode := currentPointer.NodePointers[0]
+
+	if targetNode == s.end || targetNode.NodeKey != key {
+		return false
+	}
+
+	for ind, pointer := range updateList {
+		level := len(updateList) - 1 - ind
+
+		if pointer.NodePointers[level] == targetNode {
+			pointer.NodePointers[level] = targetNode.NodePointers[level]
+		}
+	}
+
+	for len(s.start.NodePointers) > 1 && s.start.NodePointers[len(s.start.NodePointers)-1] == s.end {
+		s.start.NodePointers = s.start.NodePointers[:len(s.start.NodePointers)-1]
+	}
+
+	return true
 }
 
 func (s *Skiplist[K, V]) update(key K, newValue V) bool {
+	/* update function: updates the value for the key if it exists, returns true on succesful operaion, false otherwise */
 	node := s.search(key)
 	if node != nil {
 		node.NodeValue = newValue
