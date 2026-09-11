@@ -26,6 +26,25 @@ type Skiplist[K Key, V Value] struct {
 	end   *Node[K, V]
 }
 
+func NewSkipList[K Key, V Value]() *Skiplist[K, V] {
+
+	start := &Node[K, V]{
+		NodePointers: make([]*Node[K, V], 1),
+	}
+
+	end := &Node[K, V]{
+		NodePointers: make([]*Node[K, V], 0),
+	}
+
+	start.NodePointers[0] = end
+
+	return &Skiplist[K, V]{
+		start: start,
+		end:   end,
+	}
+
+}
+
 func randomLevel() int {
 	/* generates a random integer which is used to define the height of a new node, based on a coin flip simulation */
 
@@ -36,7 +55,7 @@ func randomLevel() int {
 	return level
 }
 
-func (s *Skiplist[K, V]) search(targetKey K) *Node[K, V] {
+func (s *Skiplist[K, V]) Search(targetKey K) *Node[K, V] {
 	/* search function: locates a key if it exists in the skiplist */
 
 	currentPointer := s.start
@@ -59,10 +78,10 @@ func (s *Skiplist[K, V]) search(targetKey K) *Node[K, V] {
 	return resultPointer
 }
 
-func (s *Skiplist[K, V]) insert(Key K, Value V) *Node[K, V] {
+func (s *Skiplist[K, V]) Insert(Key K, Value V) *Node[K, V] {
 	/* insert function: inserts a new node and returns pointer to it */
 
-	if s.search(Key) != nil {
+	if s.Search(Key) != nil {
 		return nil
 	}
 
@@ -107,7 +126,7 @@ func (s *Skiplist[K, V]) insert(Key K, Value V) *Node[K, V] {
 	return newNode
 }
 
-func (s *Skiplist[K, V]) delete(key K) bool {
+func (s *Skiplist[K, V]) Delete(key K) bool {
 	/* delete function: deletes a node from the skiplist and returns true if its succesfully deleted, false otherwise */
 
 	var updateList []*Node[K, V]
@@ -144,9 +163,9 @@ func (s *Skiplist[K, V]) delete(key K) bool {
 	return true
 }
 
-func (s *Skiplist[K, V]) update(key K, newValue V) bool {
+func (s *Skiplist[K, V]) Update(key K, newValue V) bool {
 	/* update function: updates the value for the key if it exists, returns true on succesful operaion, false otherwise */
-	node := s.search(key)
+	node := s.Search(key)
 	if node != nil {
 		node.NodeValue = newValue
 		return true
