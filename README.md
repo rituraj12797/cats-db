@@ -10,7 +10,7 @@
    /`.          ,'-`----Y   |
   (            ;        |   '
   |  ,-.    ,-'         |  /
-  |  | (   |        hjw | /
+  |  | (   |            | /
   )  |  \  `.___________|/
   `--'   `--'
 ```
@@ -27,6 +27,3 @@ A simple time series database built in Go on top of an underlying LSM storage en
 3. MVCC through a lock free skip list.
 4. Leveled compaction for key partiotioned SSTs.
 5. Range read queries.
-
-
-
