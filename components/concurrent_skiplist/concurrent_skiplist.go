@@ -73,7 +73,7 @@ type SkipList struct {
 func NewSkipList() *SkipList {
 
 	start := &SkipListNode{
-		pointerArray: make([]atomic.Pointer[SkipListNode], 0),
+		pointerArray: make([]atomic.Pointer[SkipListNode], 1),
 	}
 
 	end := &SkipListNode{}
@@ -123,7 +123,7 @@ func (s *SkipList) Seek(key int64, readTransactionNumber int64) *SkipListNode {
 	// since we used lessThan we found the largest node which is less than compositeTargetKey, so the possible candidate is it's first child on level 0
 	candidate := currentPointer.pointerArray[0].Load()
 
-	if candidate != s.end && candidate.nodeKey.key == key {
+	if candidate.nodeKey.key == key {
 		if !candidate.tombstone {
 			return candidate
 		}
@@ -137,6 +137,59 @@ func (S *SkipList) Insert(key int64, value int64, writeTransactionNumber int64, 
 	// receives a delete boolean, to decide weather to flag a node as tombstone or not
 	// returns a pointer to the inserted node, else nil
 	// this writeTransactionNumber is calculated as (SkipList.load(currentVersion) + 1)
+
+	// once complete return the pointer to the new node
+
+	currentPointer := s.start
+
+	compositeTargetKey := CompositeKey{
+		key:           key,
+		versionNumber: writeTransactionNumber,
+	}
+
+	// step 1 : construct the backward and forward array of nodes
+	backwardArray := make([]*SkipListNode, 0) // we will store the current pointer of all the nodes at each level
+	for level := len(S.start.pointerArray) - 1; level >= 0; level-- {
+		nextPointer := currentPointer.pointerArray[level].Load() // atomically load the forward pointer of current node for this level
+		for nextPointer != S.end && (nextPointer.nodeKey.LessThan(&compositeTargetKey)) {
+			currentPointer = nextPointer
+			nextPointer = currentPointer.pointerArray[level].Load()
+		}
+		backwardArray = append(backwardArray, currentPointer) // now nextpointer is GreaterthanEqualTo(composite(key,writeTransactionNumber))
+		// but since writeTransactionNumber is new write txn and does not exist in the skip list untill now, so next pointer is GreaterThan(composite(key,writeTransactionNumber))
+	}
+
+	// step 2 : create a node with CompositeKey(key, writeTransactionNumber) and value
+	height := randomLevel()
+	newNode := &SkipListNode{
+		nodeKey: CompositeKey{
+			key:           key,
+			versionNumber: writeTransactionNumber,
+		},
+		nodeValue:    value,
+		pointerArray: make([]atomic.Pointer[SkipListNode], height),
+	}
+
+	// using the backwardArray we can find all (levell, current_node, rejection_node)
+	// step 3 : set the forward pointer for this newly created node
+	for index, node := range backwardArray {
+		level := (len(backwardArray) - 1) - index
+		if level < height {
+			newNode.pointerArray[level].Store(node.pointerArray[level].Load())
+		}
+	}
+
+	// step 4 : atomically swap the pointers of backward nodes to this at their corrosponding levels
+	for index, node := range backwardArray {
+		level := (len(backwardArray) - 1) - index
+		if len(node.pointerArray) > level {
+			currentNextPointer := node.pointerArray[level]
+			node.pointerArray[level].CompareAndSwap(currentNextPointer.Load(), newNode) // doubt here, which is better to use compare and swap or just atomic store and why
+		}
+	}
+
+	return newNode
+
 }
 
 func (S *SkipList) Update(key int64, value int64, updateTransactionNumber int64) *SkipListNode {
