@@ -103,7 +103,7 @@ func (s *SkipList) randomLevel() int {
 	/* generates a random integer which is used to define the height of a new node, based on a coin flip simulation */
 
 	level := 1
-	for rand.Float32() <= 0.5 && level <= s.heightLimit {
+	for rand.Float32() <= 0.5 && level < s.heightLimit {
 		level++
 	}
 	return level
@@ -191,13 +191,10 @@ func (s *SkipList) Insert(key int64, value int64, writeTransactionNumber int64, 
 	}
 
 	// step 4 : atomically swap the pointers of backward nodes to this at their corrosponding levels
-	for index, node := range backwardArray {
-		level := (len(backwardArray) - 1) - index
-		if len(node.pointerArray) > level {
-			node.pointerArray[level].Store(newNode)
-			// CAS ? we have single writer so no write contention to protect against
-			// Simply overriding using store would do
-		}
+	for level := 0; level < len(backwardArray) && level < height; level++ { // height check was missing to make sure we only change upto levels which can accomodate upto heigh
+		// ex height =3 can only acomodate level 0 1 and 2 and not not be used as a level 3 node
+		pred := backwardArray[len(backwardArray)-1-level]
+		pred.pointerArray[level].Store(newNode)
 	}
 
 	// once back pointers are also attached and insert is complete atomically update currentMaxHeight
