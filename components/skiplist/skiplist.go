@@ -127,7 +127,7 @@ func (s *Skiplist[K, V]) Insert(Key K, Value V) *Node[K, V] {
 }
 
 func (s *Skiplist[K, V]) Delete(key K) bool {
-	/* delete function: deletes a node from the skiplist and returns true if its succesfully deleted, false otherwise */
+	/* delete function: deletes a node from the skiplist and returns true if its successfully deleted, false otherwise */
 
 	var updateList []*Node[K, V]
 	currentPointer := s.start
@@ -164,7 +164,7 @@ func (s *Skiplist[K, V]) Delete(key K) bool {
 }
 
 func (s *Skiplist[K, V]) Update(key K, newValue V) bool {
-	/* update function: updates the value for the key if it exists, returns true on succesful operaion, false otherwise */
+	/* update function: updates the value for the key if it exists, returns true on successfully operation, false otherwise */
 	node := s.Search(key)
 	if node != nil {
 		node.NodeValue = newValue
