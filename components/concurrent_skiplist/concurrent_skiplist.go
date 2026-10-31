@@ -58,10 +58,10 @@ func (K *CompositeKey) EqualTo(other *CompositeKey) bool {
 }
 
 type SkipListNode struct {
-	nodeKey      CompositeKey
-	nodeValue    int64
-	pointerArray []atomic.Pointer[SkipListNode] // array of atomic pointers
-	tombstone    bool
+	NodeKey      CompositeKey
+	NodeValue    int64
+	pointerArray []atomic.Pointer[SkipListNode] // array of atomic pointers, no need to export this
+	Tombstone    bool
 }
 
 type SkipList struct {
@@ -126,7 +126,7 @@ func (s *SkipList) Seek(key int64) *SkipListNode {
 	for level := s.currentMaxHeight.Load() - 1; level >= 0; level-- {
 		nextPointer := currentPointer.pointerArray[level].Load() // atomically load the forward pointer of current node for this level
 
-		for nextPointer != s.end && (nextPointer.nodeKey.LessThan(&compositeTargetKey)) {
+		for nextPointer != s.end && (nextPointer.NodeKey.LessThan(&compositeTargetKey)) {
 			currentPointer = nextPointer
 			nextPointer = currentPointer.pointerArray[level].Load()
 		}
@@ -134,8 +134,8 @@ func (s *SkipList) Seek(key int64) *SkipListNode {
 		candidate = nextPointer
 	}
 
-	if candidate != s.end && candidate.nodeKey.key == key {
-		if !candidate.tombstone {
+	if candidate != s.end && candidate.NodeKey.key == key {
+		if !candidate.Tombstone {
 			return candidate
 		}
 	}
@@ -145,7 +145,7 @@ func (s *SkipList) Seek(key int64) *SkipListNode {
 
 func (s *SkipList) Insert(key int64, value int64, delete bool) *SkipListNode {
 	// receives a key, value and a write transaction number assigned to this insert request
-	// receives a delete boolean, to decide weather to flag a node as tombstone or not
+	// receives a delete boolean, to decide weather to flag a node as Tombstone or not
 	// returns a pointer to the inserted node, else nil
 	// this writeTransactionNumber is calculated as (SkipList.load(currentVersion) + 1)
 
@@ -162,7 +162,7 @@ func (s *SkipList) Insert(key int64, value int64, delete bool) *SkipListNode {
 	backwardArray := make([]*SkipListNode, 0)                         // we will store the current pointer of all the nodes at each level
 	for level := s.currentMaxHeight.Load() - 1; level >= 0; level-- { // start from the max height
 		nextPointer := currentPointer.pointerArray[level].Load() // atomically load the forward pointer of current node for this level
-		for nextPointer != s.end && (nextPointer.nodeKey.LessThan(&compositeTargetKey)) {
+		for nextPointer != s.end && (nextPointer.NodeKey.LessThan(&compositeTargetKey)) {
 			currentPointer = nextPointer
 			nextPointer = currentPointer.pointerArray[level].Load()
 		}
@@ -174,9 +174,9 @@ func (s *SkipList) Insert(key int64, value int64, delete bool) *SkipListNode {
 	height := s.randomLevel()
 
 	newNode := &SkipListNode{
-		nodeKey:      compositeTargetKey,
-		nodeValue:    value,
-		tombstone:    delete,
+		NodeKey:      compositeTargetKey,
+		NodeValue:    value,
+		Tombstone:    delete,
 		pointerArray: make([]atomic.Pointer[SkipListNode], height),
 	}
 
@@ -218,7 +218,7 @@ func (s *SkipList) Update(key int64, value int64) *SkipListNode {
 	//
 	// need to check existence of this node
 	seek_res := s.Seek(key)
-	if (seek_res) != nil && seek_res.tombstone == false {
+	if (seek_res) != nil && seek_res.Tombstone == false {
 		// if the node exists
 		return s.Insert(key, value, false)
 	}
@@ -228,7 +228,7 @@ func (s *SkipList) Update(key int64, value int64) *SkipListNode {
 
 func (s *SkipList) Delete(key int64) (success bool, status int) {
 	seek_res := s.Seek(key)
-	if seek_res != nil && seek_res.tombstone == false {
+	if seek_res != nil && seek_res.Tombstone == false {
 		if s.Insert(key, key, true) != nil {
 			return true, 1
 		}
