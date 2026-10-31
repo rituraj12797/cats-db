@@ -138,10 +138,33 @@ func TestDeleteAndUpdate(t *testing.T) {
 // 4. One writer inserting while many readers seek concurrently.
 // Readers must never observe a wrong value (nil is fine: not yet visible).
 func TestConcurrentReadersSingleWriter(t *testing.T) {
-
+	// skipping this for now
 }
 
 // 5. Snapshot stays stable while a writer keeps appending newer versions of the same key.
 func TestSnapshotStableUnderConcurrentWrites(t *testing.T) {
+	// skipping this for now
+}
 
+func TestRepeatableReads( t *testing.T) {
+	//
+	//
+	// launch a writer and multiple readers
+	s := NewSkipList(32)
+
+	go func writer(s *SkipList) {
+		for x := range 1000 {
+			s.Insert(x, x*10, false)
+		}
+	}(s)
+
+	// launch 10 readers
+
+	for x := range 100 {
+		go func read(s *SkipList) {
+			for y := range 10 {
+				x = s.Seek()
+			}
+		}(s)
+	}
 }

@@ -109,15 +109,15 @@ func (s *SkipList) randomLevel() int {
 	return level
 }
 
-func (s *SkipList) Seek(key int64, readTransactionNumber int64) *SkipListNode {
+func (s *SkipList) Seek(key int64) *SkipListNode {
 	// receives a key along with a read transaction number assigned to this request
 	// returns a pointer to a node with the same key and latest possible versionNumber, else nil
 
 	currentPointer := s.start // reads start, since start's pointer never changes we need not to use atomic here
-
+	var candidate *SkipListNode
 	compositeTargetKey := CompositeKey{
 		key:           key,
-		versionNumber: readTransactionNumber,
+		versionNumber: s.currentVersion.Load(),
 	}
 
 	for level := s.currentMaxHeight.Load() - 1; level >= 0; level-- {
@@ -127,10 +127,9 @@ func (s *SkipList) Seek(key int64, readTransactionNumber int64) *SkipListNode {
 			currentPointer = nextPointer
 			nextPointer = currentPointer.pointerArray[level].Load()
 		}
+		// at level 0 when we arrive at this point means that we found the largest node which is less than compositeTargetKey, so the possible candidate is it's first child on level 0
+		candidate = nextPointer
 	}
-
-	// since we used lessThan we found the largest node which is less than compositeTargetKey, so the possible candidate is it's first child on level 0
-	candidate := currentPointer.pointerArray[0].Load()
 
 	if candidate != s.end && candidate.nodeKey.key == key {
 		if !candidate.tombstone {
@@ -141,7 +140,7 @@ func (s *SkipList) Seek(key int64, readTransactionNumber int64) *SkipListNode {
 	return nil
 }
 
-func (s *SkipList) Insert(key int64, value int64, writeTransactionNumber int64, delete bool) *SkipListNode {
+func (s *SkipList) Insert(key int64, value int64, delete bool) *SkipListNode {
 	// receives a key, value and a write transaction number assigned to this insert request
 	// receives a delete boolean, to decide weather to flag a node as tombstone or not
 	// returns a pointer to the inserted node, else nil
@@ -153,7 +152,7 @@ func (s *SkipList) Insert(key int64, value int64, writeTransactionNumber int64, 
 
 	compositeTargetKey := CompositeKey{
 		key:           key,
-		versionNumber: writeTransactionNumber,
+		versionNumber: s.currentVersion.Load() + 1,
 	}
 
 	// step 1 : construct the backward and forward array of nodes
@@ -172,10 +171,7 @@ func (s *SkipList) Insert(key int64, value int64, writeTransactionNumber int64, 
 	height := s.randomLevel()
 
 	newNode := &SkipListNode{
-		nodeKey: CompositeKey{
-			key:           key,
-			versionNumber: writeTransactionNumber,
-		},
+		nodeKey:      compositeTargetKey,
 		nodeValue:    value,
 		tombstone:    delete,
 		pointerArray: make([]atomic.Pointer[SkipListNode], height),
@@ -197,33 +193,35 @@ func (s *SkipList) Insert(key int64, value int64, writeTransactionNumber int64, 
 		pred.pointerArray[level].Store(newNode)
 	}
 
+	s.currentVersion.Add(1) // new node inserted, now we can update he version counter
+
 	// once back pointers are also attached and insert is complete atomically update currentMaxHeight
 	// why didn't we do it earlier, since the already existing nodes were not attacthed to this node,
 	// increasing the currentMaxHeight before hand wouldl only mean we will styarting our search from
 	// a bigger height and no intermediate node between start and end at that height
 	if height > int(s.currentMaxHeight.Load()) {
-		s.currentMaxHeight.Store(int32(height))
+		s.currentMaxHeight.Store(int32(height)) // update the max height
 	}
 
 	return newNode
 }
 
-func (s *SkipList) Update(key int64, value int64, updateTransactionNumber int64) *SkipListNode {
+func (s *SkipList) Update(key int64, value int64) *SkipListNode {
 	// receives a key, value and an update transaction number assigned to this update request
 	// returns a pointer to the inserted node, else nil
 	// since we want this skip list to be append only, we nevere update inplace instead for updating
 	// we just insert a higher version node for the same key with the different updated value
 	// internally calls Insert function
-	return s.Insert(key, value, updateTransactionNumber, false)
+	return s.Insert(key, value, false)
 }
 
-func (s *SkipList) Delete(key int64, deleteTransactionNumber int64) bool {
+func (s *SkipList) Delete(key int64) bool {
 	// receives a key and a delete transaction number assigned to this delete request
 	// returns boolen based on succes of the delete operation
 	// since this skip list is append only, we never actually delete the entry but add a newer version of the same key with a tombstone indicating it's deleted status
 	// internally calls Insert function
 
-	if s.Insert(key, key, deleteTransactionNumber, true) != nil {
+	if s.Insert(key, key, true) != nil {
 		return true
 	} else {
 		return false
