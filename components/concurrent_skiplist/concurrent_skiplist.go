@@ -74,6 +74,10 @@ type SkipList struct {
 
 func NewSkipList(limit int) *SkipList {
 
+	if limit < 5 { // minimum height of the skip list should be 5 atleast
+		return nil
+	}
+
 	start := &SkipListNode{
 		pointerArray: make([]atomic.Pointer[SkipListNode], limit), // define the start node with maximum height
 	}
