@@ -1,8 +1,8 @@
 package lockFreeSkiplist
 
 import (
-	"math"
 	"sync"
+	"sync/atomic"
 	"testing"
 )
 
@@ -15,156 +15,94 @@ func handler(wg *sync.WaitGroup, fn func()) {
 	}()
 }
 
-// 1. Basic insert + seek, keys inserted out of order.
+// basic insert + seek, keys inserted out of order.
 func TestInsertAndSeek(t *testing.T) {
 	sl := NewSkipList(16)
-	for i, k := range []int64{5, 1, 9, 3, 7} {
-		sl.Insert(k, k*10, int64(i+1), false)
+	for _, k := range []int64{5, 1, 9, 3, 7} {
+		sl.Insert(k, k*10, false)
 	}
 
 	for _, k := range []int64{1, 3, 5, 7, 9} {
-		n := sl.Seek(k, math.MaxInt64)
-		if n == nil || n.nodeValue != k*10 {
+		n := sl.Seek(k)
+		if n == nil || n.NodeValue != k*10 {
 			t.Fatalf("key %d: expected value %d, got %+v", k, k*10, n)
 		}
 	}
 	for _, k := range []int64{0, 2, 4, 10} {
-		if n := sl.Seek(k, math.MaxInt64); n != nil {
+		if n := sl.Seek(k); n != nil {
 			t.Fatalf("key %d should not exist, got %+v", k, n)
 		}
 	}
 }
 
-// 2. Snapshot isolation: a read txn only sees versions <= its txn number.
-func TestSnapshotVisibility(t *testing.T) {
-	skipList := NewSkipList(16)
-
-	insertData := []struct {
-		key         int
-		value       int
-		transaction int
-		tombstone   bool
-	}{
-		{0, 1, 1, false},
-		{0, 2, 2, false},
-		{0, 3, 3, false},
-		{0, 4, 4, true}, // tombstone marked
-		{0, 5, 5, false},
-		{0, 6, 6, false},
-		{0, 7, 7, false},
-		{0, 8, 8, false},
-		{0, 9, 9, false},
-	}
-
-	for _, x := range insertData {
-		skipList.Insert(int64(x.key), int64(x.value), int64(x.transaction), x.tombstone)
-	}
-
-	testData := []struct {
-		exists        bool
-		key           int
-		transaction   int
-		expectedValue int
-	}{
-		{true, 0, 1, 1},
-		{true, 0, 2, 2},
-		{true, 0, 3, 3},
-		{false, 0, 4, -1}, // should not exist as deleted(marked as tombstone) in 4th txn
-		{true, 0, 5, 5},
-		{true, 0, 6, 6},
-		{true, 0, 7, 7},
-		{true, 0, 8, 8},
-		{true, 0, 9, 9},
-		{false, 1, 1, 9},
-		{false, 2, 3, 9},
-	}
-
-	for _, x := range testData {
-		res := skipList.Seek(int64(x.key), int64(x.transaction))
-		// t.Log("Test case: ", x)
-		// t.Log(" Res : ", res)
-
-		if res != nil {
-			if res.nodeValue != int64(x.expectedValue) {
-				t.Fatal("Wrong value found, key:", x.key, " expected: ", x.expectedValue, " found: ", res.nodeKey)
-			}
-		} else {
-			if x.exists == true {
-				t.Fatal("Node was inserted but not found")
-			}
-		}
-	}
-}
-
-// 3. Delete (tombstone) hides the key only for txns >= delete txn; update re-adds it.
-func TestDeleteAndUpdate(t *testing.T) {
-	sl := NewSkipList(16)
-	res := sl.Insert(5, 50, 1, false)
-
-	t.Log(" Inserted : ", res)
-	if !sl.Delete(5, 2) {
-		t.Fatal("delete returned false")
-	} else {
-		t.Logf(" Deleted : 5, 2")
-	}
-
-	t.Log("Seeking (Key = 5, txn = 1, Expected: Val = 50 \n", sl.Seek(5, 1))
-
-	if n := sl.Seek(5, 1); n == nil || n.nodeValue != 50 {
-		t.Fatalf("txn 1 should still see 50, got %+v", n)
-	}
-
-	t.Log("Seeking (Key = 5, txn = 2, Expected: Tombstone \n", sl.Seek(5, 2))
-	if n := sl.Seek(5, 2); n != nil {
-		t.Fatalf("txn 2 should see tombstone (nil), got %+v", n)
-	}
-
-	t.Log("Updating (Key = 5, txn = 99, Val = 3 \n")
-
-	sl.Update(5, 99, 3)
-	if n := sl.Seek(5, 3); n == nil || n.nodeValue != 99 {
-		t.Fatalf("txn 3 should see 99, got %+v", n)
-	}
-	t.Log("Seeking (Key = 5, txn = 110, Expected: Value = 99 \n", sl.Seek(5, 110))
-	if n := sl.Seek(5, 110); n == nil || n.nodeValue != 99 {
-		t.Fatalf("txn 110 should see 99, got %+v", n)
-	}
-	t.Log("Seeking (Key = 5, txn = 2, Expected: Tombstone \n", sl.Seek(5, 2))
-	if n := sl.Seek(5, 2); n != nil {
-		t.Fatalf("txn 2 should still see tombstone, got %+v", n)
-	}
-}
-
-// 4. One writer inserting while many readers seek concurrently.
-// Readers must never observe a wrong value (nil is fine: not yet visible).
+// readers must never observe a wrong value (nil is fine: not yet visible).
 func TestConcurrentReadersSingleWriter(t *testing.T) {
 	// skipping this for now
 }
 
-// 5. Snapshot stays stable while a writer keeps appending newer versions of the same key.
+// snapshot stays stable while a writer keeps appending newer versions of the same key.
 func TestSnapshotStableUnderConcurrentWrites(t *testing.T) {
 	// skipping this for now
 }
 
-func TestRepeatableReads( t *testing.T) {
-	//
-	//
-	// launch a writer and multiple readers
+func TestRepeatableReads(t *testing.T) {
+	/* This test function launches a writer go routine and writes 10,000 entries in the skip list
+	 * 2 modes:
+	 * either you wait for the writer to finish all writes then launch 1000 reader go routines ----> uncomment linee 57, 58, 61, 67 for this, expected result = PASSED: 10000, FAILED: 0, NIL: 0
+	 * or you launch the reader go routines concurrently ----> comment line 57, 58, 61, 67, expected result = PASSED < 10,000, FAILED: 0, NIL: > 0
+	 * in the later mode PASSED may be < 10k reason being, some writes  may not have been completed before their read query got launched resulting in nil
+	 */
 	s := NewSkipList(32)
 
-	go func writer(s *SkipList) {
-		for x := range 1000 {
-			s.Insert(x, x*10, false)
+	// var wgs sync.WaitGroup
+	// wgs.Add(1)
+
+	go func(s *SkipList) {
+		// defer wgs.Done()
+		for x := range 10000 { // 0 to 9999
+			s.Insert(int64(x+1), int64((x+1)*10), false)
 		}
 	}(s)
 
-	// launch 10 readers
+	// wgs.Wait()
 
-	for x := range 100 {
-		go func read(s *SkipList) {
-			for y := range 10 {
-				x = s.Seek()
+	var pass_count atomic.Int32
+	var failed_count atomic.Int32
+	var nil_count atomic.Int32
+
+	pass_count.Store(0)
+	failed_count.Store(0)
+	nil_count.Store(0)
+
+	var wg sync.WaitGroup
+	wg.Add(1000)
+
+	// launch 1000 readers
+	for x := range 1000 { // 0 to 999
+		go func(s *SkipList, x int) {
+			defer wg.Done()
+			for y := range 10 { // 0 to 9
+				num := (x * 10) + y + 1
+				res := s.Seek(int64(num))
+				if res != nil {
+					if res.NodeValue != (res.NodeKey.Key * 10) {
+						t.Fatal("FAIL, key = ", res.NodeKey.Key, " value: ", res.NodeValue)
+						failed_count.Add(1)
+					} else {
+						pass_count.Add(1)
+					}
+				} else {
+					nil_count.Add(1)
+				}
 			}
-		}(s)
+		}(s, x)
 	}
+
+	// wait for them to finish
+	wg.Wait()
+
+	t.Log("PASSED : ", pass_count.Load())
+	t.Log("FAILED : ", failed_count.Load())
+	t.Log("NIL : ", nil_count.Load())
+
 }

@@ -9,52 +9,52 @@ import (
 // Sorted in increasing order of original key, and for same actual keys sorted in decreasing order of version number
 
 type CompositeKey struct {
-	key           int64
-	versionNumber int64
+	Key           int64
+	versionNumber int64 // no need to export version number
 }
 
 func (K *CompositeKey) LessThan(other *CompositeKey) bool {
-	if K.key < other.key {
+	if K.Key < other.Key {
 		return true
 	}
-	if K.key == other.key && K.versionNumber > other.versionNumber {
+	if K.Key == other.Key && K.versionNumber > other.versionNumber {
 		return true
 	}
 	return false
 }
 
 func (K *CompositeKey) LessThanEqualTo(other *CompositeKey) bool {
-	if K.key < other.key {
+	if K.Key < other.Key {
 		return true
 	}
-	if K.key == other.key && K.versionNumber >= other.versionNumber {
+	if K.Key == other.Key && K.versionNumber >= other.versionNumber {
 		return true
 	}
 	return false
 }
 
 func (K *CompositeKey) MoreThan(other *CompositeKey) bool {
-	if K.key > other.key {
+	if K.Key > other.Key {
 		return true
 	}
-	if K.key == other.key && K.versionNumber < other.versionNumber {
+	if K.Key == other.Key && K.versionNumber < other.versionNumber {
 		return true
 	}
 	return false
 }
 
 func (K *CompositeKey) MoreThanEqualTo(other *CompositeKey) bool {
-	if K.key > other.key {
+	if K.Key > other.Key {
 		return true
 	}
-	if K.key == other.key && K.versionNumber <= other.versionNumber {
+	if K.Key == other.Key && K.versionNumber <= other.versionNumber {
 		return true
 	}
 	return false
 }
 
 func (K *CompositeKey) EqualTo(other *CompositeKey) bool {
-	return K.key == other.key && K.versionNumber == other.versionNumber
+	return K.Key == other.Key && K.versionNumber == other.versionNumber
 }
 
 type SkipListNode struct {
@@ -119,7 +119,7 @@ func (s *SkipList) Seek(key int64) *SkipListNode {
 	currentPointer := s.start // reads start, since start's pointer never changes we need not to use atomic here
 	var candidate *SkipListNode
 	compositeTargetKey := CompositeKey{
-		key:           key,
+		Key:           key,
 		versionNumber: s.currentVersion.Load(),
 	}
 
@@ -134,7 +134,7 @@ func (s *SkipList) Seek(key int64) *SkipListNode {
 		candidate = nextPointer
 	}
 
-	if candidate != s.end && candidate.NodeKey.key == key {
+	if candidate != s.end && candidate.NodeKey.Key == key {
 		if !candidate.Tombstone {
 			return candidate
 		}
@@ -154,7 +154,7 @@ func (s *SkipList) Insert(key int64, value int64, delete bool) *SkipListNode {
 	currentPointer := s.start
 
 	compositeTargetKey := CompositeKey{
-		key:           key,
+		Key:           key,
 		versionNumber: s.currentVersion.Load() + 1,
 	}
 
