@@ -110,7 +110,6 @@ func (s *SkipList) randomLevel() int {
 }
 
 func (s *SkipList) Seek(key int64) *SkipListNode {
-	// receives a key along with a read transaction number assigned to this request
 	// returns a pointer to a node with the same key and latest possible versionNumber, else nil
 
 	currentPointer := s.start // reads start, since start's pointer never changes we need not to use atomic here
@@ -212,18 +211,24 @@ func (s *SkipList) Update(key int64, value int64) *SkipListNode {
 	// since we want this skip list to be append only, we nevere update inplace instead for updating
 	// we just insert a higher version node for the same key with the different updated value
 	// internally calls Insert function
-	return s.Insert(key, value, false)
+	//
+	// need to check existence of this node
+	seek_res := s.Seek(key)
+	if (seek_res) != nil && seek_res.tombstone == false {
+		// if the node exists
+		return s.Insert(key, value, false)
+	}
+	// else this node does not exist
+	return nil
 }
 
-func (s *SkipList) Delete(key int64) bool {
-	// receives a key and a delete transaction number assigned to this delete request
-	// returns boolen based on succes of the delete operation
-	// since this skip list is append only, we never actually delete the entry but add a newer version of the same key with a tombstone indicating it's deleted status
-	// internally calls Insert function
-
-	if s.Insert(key, key, true) != nil {
-		return true
-	} else {
-		return false
+func (s *SkipList) Delete(key int64) (success bool, status int) {
+	seek_res := s.Seek(key)
+	if seek_res != nil && seek_res.tombstone == false {
+		if s.Insert(key, key, true) != nil {
+			return true, 1
+		}
+		return false, 1
 	}
+	return false, 0
 }
