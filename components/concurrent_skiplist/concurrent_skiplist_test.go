@@ -4,6 +4,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 // handler launches fn in its own goroutine and tracks it with wg.
@@ -45,22 +46,28 @@ func TestSnapshotStableUnderConcurrentWrites(t *testing.T) {
 	// skipping this for now
 }
 
-func TestRepeatableReads(t *testing.T) {
+func TestReadValidity(t *testing.T) {
 	/* This test function launches a writer go routine and writes 10,000 entries in the skip list
-	 * 2 modes:
-	 * either you wait for the writer to finish all writes then launch 1000 reader go routines ----> uncomment linee 57, 58, 61, 67 for this, expected result = PASSED: 10000, FAILED: 0, NIL: 0
-	 * or you launch the reader go routines concurrently ----> comment line 57, 58, 61, 67, expected result = PASSED < 10,000, FAILED: 0, NIL: > 0
-	 * in the later mode PASSED may be < 10k reason being, some writes  may not have been completed before their read query got launched resulting in nil
+	 * Tests weather reads result into succesful node findings or nil, and verifies the reason for the nil output
+	 * WRITTEN BUT NOT FOUND : a parameter defining the number of time we faced a situation where an entry was written, after this when we tried to read it, we were unable to find it. Expected value : 0
+	 * SeekTest should return nil only and only when the key was not written yet.
 	 */
 	s := NewSkipList(32)
-
+	t.Logf(" Writes and reads run concurrently ")
 	// var wgs sync.WaitGroup
 	// wgs.Add(1)
 
+	var done atomic.Int32
+	done.Store(0)
+
 	go func(s *SkipList) {
 		// defer wgs.Done()
-		for x := range 10000 { // 0 to 9999
-			s.Insert(int64(x+1), int64((x+1)*10), false)
+		for x := range 100000 { // 0 to 99999
+			y := s.Insert(int64(x+1), int64((x+1)*10), false)
+			if y != nil {
+				done.Add(1) // increment by 1
+			}
+
 		}
 	}(s)
 
@@ -75,24 +82,34 @@ func TestRepeatableReads(t *testing.T) {
 	nil_count.Store(0)
 
 	var wg sync.WaitGroup
-	wg.Add(1000)
+	wg.Add(100000)
 
-	// launch 1000 readers
-	for x := range 1000 { // 0 to 999
+	var written_but_not_read atomic.Int32
+	written_but_not_read.Store(0)
+
+	// launch 100000 readers
+	for x := range 100000 {
 		go func(s *SkipList, x int) {
 			defer wg.Done()
-			for y := range 10 { // 0 to 9
-				num := (x * 10) + y + 1
-				res := s.Seek(int64(num))
-				if res != nil {
-					if res.NodeValue != (res.NodeKey.Key * 10) {
-						t.Fatal("FAIL, key = ", res.NodeKey.Key, " value: ", res.NodeValue)
-						failed_count.Add(1)
-					} else {
-						pass_count.Add(1)
-					}
+			num := x + 1
+
+			zd := done.Load()
+			res, read_txn_no := s.SeekTest(int64(num))
+
+			if res != nil {
+				if res.NodeValue != (res.NodeKey.Key * 10) {
+					t.Fatal("FAIL, key = ", res.NodeKey.Key, " value: ", res.NodeValue)
+					failed_count.Add(1)
 				} else {
-					nil_count.Add(1)
+					pass_count.Add(1)
+				}
+			} else {
+				nil_count.Add(1)
+				// verify this
+				if read_txn_no >= int64(num) {
+					// number was written but not found in read
+					written_but_not_read.Add(1)
+					t.Log(" zd : ", zd, " tried to read : ", num, "read_txn_no : ", read_txn_no)
 				}
 			}
 		}(s, x)
@@ -104,5 +121,45 @@ func TestRepeatableReads(t *testing.T) {
 	t.Log("PASSED : ", pass_count.Load())
 	t.Log("FAILED : ", failed_count.Load())
 	t.Log("NIL : ", nil_count.Load())
+	t.Log("WRITTEN BUT NOT FOUND : ", written_but_not_read.Load())
 
+	// a new idea to test the validity of the NIL responses we are getting
+}
+
+func TestReadIdempotance(t *testing.T) {
+	s := NewSkipList(32)
+	t.Logf("  Snapshot Isolation: Repeatable Reads Test ")
+
+	var wg sync.WaitGroup
+
+	wg.Add(10001)
+	go func(s *SkipList) {
+		defer wg.Done()
+		for x := range 10000 { // 0 to 99999
+			s.Insert(int64(x+1), int64((x+1)*10), false)
+		}
+
+		for j := range 100 {
+			time.Sleep(10 * time.Microsecond)
+			for x := range 10000 {
+				s.Update(int64(x+1), int64((x+1)*10+j))
+			}
+		}
+	}(s)
+
+	for x := range 10000 {
+		go func(s *SkipList, x int) {
+			defer wg.Done()
+			num := x + 1
+
+			res, read_txn_no := s.TestSnapshotReadIdempotence(int64(num))
+			if len(res) > 0 {
+				if res[0].NodeValue != res[len(res)-1].NodeValue {
+					t.Fatal("more than one read response detected, num: ", num, " read_txn : ", read_txn_no)
+				}
+			}
+		}(s, x)
+	}
+
+	wg.Wait()
 }

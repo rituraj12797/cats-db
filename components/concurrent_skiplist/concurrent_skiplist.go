@@ -2,7 +2,9 @@ package lockFreeSkiplist
 
 import (
 	"math/rand/v2"
+	"sort"
 	"sync/atomic"
+	"time"
 )
 
 // Node key is composite which consists of original key + transaction_id in which it was created
@@ -89,7 +91,7 @@ func NewSkipList(limit int) *SkipList {
 	}
 
 	var s1 atomic.Int64
-	s1.Store(1)
+	s1.Store(0) // stgart with version 0
 
 	var x atomic.Int32
 	x.Store(1)
@@ -126,7 +128,7 @@ func (s *SkipList) Seek(key int64) *SkipListNode {
 	for level := s.currentMaxHeight.Load() - 1; level >= 0; level-- {
 		nextPointer := currentPointer.pointerArray[level].Load() // atomically load the forward pointer of current node for this level
 
-		for nextPointer != s.end && (nextPointer.NodeKey.LessThan(&compositeTargetKey)) {
+		for nextPointer != s.end && (nextPointer.NodeKey.LessThan(&compositeTargetKey)) { // if we are not at end and the current next node is not a future node
 			currentPointer = nextPointer
 			nextPointer = currentPointer.pointerArray[level].Load()
 		}
@@ -189,7 +191,9 @@ func (s *SkipList) Insert(key int64, value int64, delete bool) *SkipListNode {
 		}
 	}
 
-	// step 4 : atomically swap the pointers of backward nodes to this at their corrosponding levels
+	// step 4 : atomically swap the pointers of backward nodes to this at their corrosponding levels,  the linking must be done from levle 0 to higher levels
+	// reason being: if the reader finds a bridge to a future node (with version > versionNumber) at level x and uses it to traverse the list, it must also find it at the bottom levels.
+	// hence linking must be ddone from bottom to top
 	for level := 0; level < len(backwardArray) && level < height; level++ { // height check was missing to make sure we only change upto levels which can accomodate upto heigh
 		// ex height =3 can only acomodate level 0 1 and 2 and not not be used as a level 3 node
 		pred := backwardArray[len(backwardArray)-1-level]
@@ -235,4 +239,72 @@ func (s *SkipList) Delete(key int64) (success bool, status int) {
 		return false, 1
 	}
 	return false, 0
+}
+
+// APIs fpr testing purposes
+func (s *SkipList) SeekTest(key int64) (node *SkipListNode, txnno int64) {
+	// returns a pointer to a node with the same key and latest possible versionNumber, else nil
+
+	currentPointer := s.start // reads start, since start's pointer never changes we need not to use atomic here
+	var candidate *SkipListNode
+	compositeTargetKey := CompositeKey{
+		Key:           key,
+		versionNumber: s.currentVersion.Load(),
+	}
+
+	for level := s.currentMaxHeight.Load() - 1; level >= 0; level-- {
+		nextPointer := currentPointer.pointerArray[level].Load() // atomically load the forward pointer of current node for this level
+
+		for nextPointer != s.end && (nextPointer.NodeKey.LessThan(&compositeTargetKey)) { // if we are not at end and the current next node is not a future node
+			currentPointer = nextPointer
+			nextPointer = currentPointer.pointerArray[level].Load()
+		}
+		// at level 0 when we arrive at this point means that we found the largest node which is less than compositeTargetKey, so the possible candidate is it's first child on level 0
+		candidate = nextPointer
+	}
+
+	if candidate != s.end && candidate.NodeKey.Key == key {
+		if !candidate.Tombstone {
+			return candidate, compositeTargetKey.versionNumber
+		}
+	}
+
+	return nil, compositeTargetKey.versionNumber
+}
+
+func (s *SkipList) TestSnapshotReadIdempotence(key int64) (resArray []*SkipListNode, txnno int64) {
+
+	var resultArray []*SkipListNode
+
+	dbVersion := s.currentVersion.Load()
+
+	for range 100 {
+		time.Sleep(100 * time.Microsecond) // sleep for 0.1 millisecond in between each read
+		currentPointer := s.start
+		var candidate *SkipListNode
+		compositeTargetKey := CompositeKey{
+			Key:           key,
+			versionNumber: dbVersion,
+		}
+
+		for level := s.currentMaxHeight.Load() - 1; level >= 0; level-- {
+			nextPointer := currentPointer.pointerArray[level].Load()
+
+			for nextPointer != s.end && (nextPointer.NodeKey.LessThan(&compositeTargetKey)) {
+				currentPointer = nextPointer
+				nextPointer = currentPointer.pointerArray[level].Load()
+			}
+			candidate = nextPointer
+		}
+
+		if candidate != s.end && candidate.NodeKey.Key == key {
+			if !candidate.Tombstone {
+				resultArray = append(resultArray, candidate)
+			}
+		}
+	}
+
+	sort.Slice(resultArray, func(i, j int) bool { return resultArray[i].NodeValue > resultArray[j].NodeValue })
+
+	return resultArray, dbVersion
 }
