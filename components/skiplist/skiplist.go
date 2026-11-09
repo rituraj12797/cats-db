@@ -26,7 +26,7 @@ type Skiplist[K Key, V Value] struct {
 	end   *Node[K, V]
 }
 
-func NewSkipList[K Key, V Value]() *Skiplist[K, V] {
+func NewSTSkipList[K Key, V Value]() *Skiplist[K, V] {
 
 	start := &Node[K, V]{
 		NodePointers: make([]*Node[K, V], 1),

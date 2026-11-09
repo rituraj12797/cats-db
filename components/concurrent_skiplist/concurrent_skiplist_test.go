@@ -1,9 +1,13 @@
 package lockFreeSkiplist
 
 import (
-	"math"
+	"runtime"
 	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
+
+	"github.com/rituraj12797/cats-db/components/skiplist"
 )
 
 // handler launches fn in its own goroutine and tracks it with wg.
@@ -15,156 +19,270 @@ func handler(wg *sync.WaitGroup, fn func()) {
 	}()
 }
 
-// 1. Basic insert + seek, keys inserted out of order.
+// basic insert + seek, keys inserted out of order.
 func TestInsertAndSeek(t *testing.T) {
-	sl := NewSkipList(16)
-	for i, k := range []int64{5, 1, 9, 3, 7} {
-		sl.Insert(k, k*10, int64(i+1), false)
+	sl := NewLockFreeSkipList(16)
+	for _, k := range []int64{5, 1, 9, 3, 7} {
+		sl.Insert(k, k*10, false)
 	}
 
 	for _, k := range []int64{1, 3, 5, 7, 9} {
-		n := sl.Seek(k, math.MaxInt64)
-		if n == nil || n.nodeValue != k*10 {
+		n := sl.Seek(k)
+		if n == nil || n.NodeValue != k*10 {
 			t.Fatalf("key %d: expected value %d, got %+v", k, k*10, n)
 		}
 	}
 	for _, k := range []int64{0, 2, 4, 10} {
-		if n := sl.Seek(k, math.MaxInt64); n != nil {
+		if n := sl.Seek(k); n != nil {
 			t.Fatalf("key %d should not exist, got %+v", k, n)
 		}
 	}
 }
 
-// 2. Snapshot isolation: a read txn only sees versions <= its txn number.
-func TestSnapshotVisibility(t *testing.T) {
-	skipList := NewSkipList(16)
-
-	insertData := []struct {
-		key         int
-		value       int
-		transaction int
-		tombstone   bool
-	}{
-		{0, 1, 1, false},
-		{0, 2, 2, false},
-		{0, 3, 3, false},
-		{0, 4, 4, true}, // tombstone marked
-		{0, 5, 5, false},
-		{0, 6, 6, false},
-		{0, 7, 7, false},
-		{0, 8, 8, false},
-		{0, 9, 9, false},
-	}
-
-	for _, x := range insertData {
-		skipList.Insert(int64(x.key), int64(x.value), int64(x.transaction), x.tombstone)
-	}
-
-	testData := []struct {
-		exists        bool
-		key           int
-		transaction   int
-		expectedValue int
-	}{
-		{true, 0, 1, 1},
-		{true, 0, 2, 2},
-		{true, 0, 3, 3},
-		{false, 0, 4, -1}, // should not exist as deleted(marked as tombstone) in 4th txn
-		{true, 0, 5, 5},
-		{true, 0, 6, 6},
-		{true, 0, 7, 7},
-		{true, 0, 8, 8},
-		{true, 0, 9, 9},
-		{false, 1, 1, 9},
-		{false, 2, 3, 9},
-	}
-
-	for _, x := range testData {
-		res := skipList.Seek(int64(x.key), int64(x.transaction))
-		// t.Log("Test case: ", x)
-		// t.Log(" Res : ", res)
-
-		if res != nil {
-			if res.nodeValue != int64(x.expectedValue) {
-				t.Fatal("Wrong value found, key:", x.key, " expected: ", x.expectedValue, " found: ", res.nodeKey)
-			}
-		} else {
-			if x.exists == true {
-				t.Fatal("Node was inserted but not found")
-			}
-		}
-	}
-}
-
-// 3. Delete (tombstone) hides the key only for txns >= delete txn; update re-adds it.
-func TestDeleteAndUpdate(t *testing.T) {
-	sl := NewSkipList(16)
-	res := sl.Insert(5, 50, 1, false)
-
-	t.Log(" Inserted : ", res)
-	if !sl.Delete(5, 2) {
-		t.Fatal("delete returned false")
-	} else {
-		t.Logf(" Deleted : 5, 2")
-	}
-
-	t.Log("Seeking (Key = 5, txn = 1, Expected: Val = 50 \n", sl.Seek(5, 1))
-
-	if n := sl.Seek(5, 1); n == nil || n.nodeValue != 50 {
-		t.Fatalf("txn 1 should still see 50, got %+v", n)
-	}
-
-	t.Log("Seeking (Key = 5, txn = 2, Expected: Tombstone \n", sl.Seek(5, 2))
-	if n := sl.Seek(5, 2); n != nil {
-		t.Fatalf("txn 2 should see tombstone (nil), got %+v", n)
-	}
-
-	t.Log("Updating (Key = 5, txn = 99, Val = 3 \n")
-
-	sl.Update(5, 99, 3)
-	if n := sl.Seek(5, 3); n == nil || n.nodeValue != 99 {
-		t.Fatalf("txn 3 should see 99, got %+v", n)
-	}
-	t.Log("Seeking (Key = 5, txn = 110, Expected: Value = 99 \n", sl.Seek(5, 110))
-	if n := sl.Seek(5, 110); n == nil || n.nodeValue != 99 {
-		t.Fatalf("txn 110 should see 99, got %+v", n)
-	}
-	t.Log("Seeking (Key = 5, txn = 2, Expected: Tombstone \n", sl.Seek(5, 2))
-	if n := sl.Seek(5, 2); n != nil {
-		t.Fatalf("txn 2 should still see tombstone, got %+v", n)
-	}
-}
-
-// 4. One writer inserting while many readers seek concurrently.
-// Readers must never observe a wrong value (nil is fine: not yet visible).
+// readers must never observe a wrong value (nil is fine: not yet visible).
 func TestConcurrentReadersSingleWriter(t *testing.T) {
 	// skipping this for now
 }
 
-// 5. Snapshot stays stable while a writer keeps appending newer versions of the same key.
+// snapshot stays stable while a writer keeps appending newer versions of the same key.
 func TestSnapshotStableUnderConcurrentWrites(t *testing.T) {
 	// skipping this for now
 }
 
-func TestRepeatableReads( t *testing.T) {
-	//
-	//
-	// launch a writer and multiple readers
-	s := NewSkipList(32)
+func TestReadValidity(t *testing.T) {
+	/* This test function launches a writer go routine and writes 10,000 entries in the skip list
+	 * Tests weather reads result into succesful node findings or nil, and verifies the reason for the nil output
+	 * WRITTEN BUT NOT FOUND : a parameter defining the number of time we faced a situation where an entry was written, after this when we tried to read it, we were unable to find it. Expected value : 0
+	 * SeekTest should return nil only and only when the key was not written yet.
+	 */
+	s := NewLockFreeSkipList(32)
+	t.Logf(" Writes and reads run concurrently ")
+	// var wgs sync.WaitGroup
+	// wgs.Add(1)
 
-	go func writer(s *SkipList) {
-		for x := range 1000 {
-			s.Insert(x, x*10, false)
+	var done atomic.Int32
+	done.Store(0)
+
+	go func(s *SkipList) {
+		// defer wgs.Done()
+		for x := range 100000 { // 0 to 99999
+			y := s.Insert(int64(x+1), int64((x+1)*10), false)
+			if y != nil {
+				done.Add(1) // increment by 1
+			}
+
 		}
 	}(s)
 
-	// launch 10 readers
+	// wgs.Wait()
 
-	for x := range 100 {
-		go func read(s *SkipList) {
-			for y := range 10 {
-				x = s.Seek()
+	var pass_count atomic.Int32
+	var failed_count atomic.Int32
+	var nil_count atomic.Int32
+
+	pass_count.Store(0)
+	failed_count.Store(0)
+	nil_count.Store(0)
+
+	var wg sync.WaitGroup
+	wg.Add(100000)
+
+	var written_but_not_read atomic.Int32
+	written_but_not_read.Store(0)
+
+	// launch 100000 readers
+	for x := range 100000 {
+		go func(s *SkipList, x int) {
+			defer wg.Done()
+			num := x + 1
+
+			zd := done.Load()
+			res, read_txn_no := s.SeekTest(int64(num))
+
+			if res != nil {
+				if res.NodeValue != (res.NodeKey.Key * 10) {
+					t.Fatal("FAIL, key = ", res.NodeKey.Key, " value: ", res.NodeValue)
+					failed_count.Add(1)
+				} else {
+					pass_count.Add(1)
+				}
+			} else {
+				nil_count.Add(1)
+				// verify this
+				if read_txn_no >= int64(num) {
+					// number was written but not found in read
+					written_but_not_read.Add(1)
+					t.Log(" zd : ", zd, " tried to read : ", num, "read_txn_no : ", read_txn_no)
+				}
 			}
-		}(s)
+		}(s, x)
 	}
+
+	// wait for them to finish
+	wg.Wait()
+
+	t.Log("PASSED : ", pass_count.Load())
+	t.Log("FAILED : ", failed_count.Load())
+	t.Log("NIL : ", nil_count.Load())
+	t.Log("WRITTEN BUT NOT FOUND : ", written_but_not_read.Load())
+
+	// a new idea to test the validity of the NIL responses we are getting
+}
+
+func TestReadIdempotance(t *testing.T) {
+	s := NewLockFreeSkipList(32)
+	t.Logf("  Snapshot Isolation: Repeatable Reads Test ")
+
+	var wg sync.WaitGroup
+
+	numtest := 10000
+
+	wg.Add(numtest + 1)
+	go func(s *SkipList) {
+		defer wg.Done()
+		for x := range numtest { // 0 to 99999
+			s.Insert(int64(x+1), int64((x+1)*10), false)
+		}
+
+		for j := range 100 {
+			time.Sleep(10 * time.Microsecond)
+			for x := range numtest {
+				s.Update(int64(x+1), int64((x+1)*10+j))
+			}
+		}
+	}(s)
+
+	for x := range numtest {
+		go func(s *SkipList, x int) {
+			defer wg.Done()
+			num := x + 1
+
+			res, read_txn_no := s.TestSnapshotReadIdempotence(int64(num))
+			if len(res) > 0 {
+				if res[0].NodeValue != res[len(res)-1].NodeValue {
+					t.Fatal("more than one read response detected, num: ", num, " read_txn : ", read_txn_no)
+				}
+			}
+		}(s, x)
+	}
+
+	wg.Wait()
+}
+
+func TestSimulatedTesting(t *testing.T) {
+
+	// use a RW mutex lock based snaive skip list
+	// maintain a txn number that represents the number of writes happened -> later to be usedas the transaction number
+	// in critical section when writes happens this number is incremented
+	// now when reads happen we record their results along with the value of this txn number and the input key==> (key, txn_no, output)
+	// these readers are aunched using go routines so at the end we have simulated how a correct lock based skiplist would work.SimulatedTesting
+	//
+	// now with these test we will launch the same writer to do all the writes in the skip list first.SimulatedTesting
+	// this means the skip list is now populated
+	// but since we are suporting mvcc via vrdion numberings we will launch all those test set which contaisnof elements like
+	// read_req ==> input, txn_no, output and the state of our database for the same txn number should be same
+	// 2 ways here either we test the state of our database completely by cmparing the 2 structures
+	// or we just compare the output we get from our loc free version for the read with same txn id and same keythe out put must eb same
+	//
+	//
+	s := skiplist.NewSTSkipList[int, int]()
+
+	numTests := 100000
+	writes_done := 0
+	var rwm sync.RWMutex
+	var wg sync.WaitGroup
+
+	type ReadResult struct {
+		key   int
+		value int
+		txn   int
+	}
+	res_channel := make(chan ReadResult, numTests)
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for i := 0; i < numTests; i++ {
+			rwm.Lock()
+			s.Insert(i, i*10)
+			writes_done += 1
+			rwm.Unlock()
+		}
+	}()
+
+	wg.Add(numTests)
+	for i := 0; i < numTests; i++ {
+		go func(key int) {
+			defer wg.Done()
+			rwm.RLock()
+			txn_no := writes_done
+
+			outputNode := s.Search(key)
+			output := -1
+			if outputNode != nil {
+				output = outputNode.NodeValue
+			}
+
+			res_channel <- ReadResult{
+				key:   key,
+				value: output,
+				txn:   txn_no,
+			}
+			rwm.RUnlock()
+		}(i)
+	}
+
+	wg.Wait()
+	close(res_channel)
+
+	res_array := make([]ReadResult, 0, numTests)
+	for res := range res_channel {
+		res_array = append(res_array, res)
+	}
+
+	lf := NewLockFreeSkipList(16)
+
+	var currentTxn atomic.Int32
+	var chaosWg sync.WaitGroup
+
+	chaosWg.Add(len(res_array))
+	for _, expected := range res_array {
+		go func(exp ReadResult) {
+			defer chaosWg.Done()
+
+			for currentTxn.Load() < int32(exp.txn) {
+				runtime.Gosched()
+			}
+
+			actualNode := lf.SeekVersion(int64(exp.key), int64(exp.txn))
+
+			actualOut := -1
+			if actualNode != nil {
+				actualOut = int(actualNode.NodeValue)
+			}
+
+			if actualOut != exp.value {
+				t.Errorf("MVCC/Concurrency violation at txn %d for key %d: expected %d, got %d",
+					exp.txn, exp.key, exp.value, actualOut)
+			}
+		}(expected)
+	}
+
+	chaosWg.Add(1)
+	go func() {
+		defer chaosWg.Done()
+		for i := 0; i < numTests; i++ {
+			txnID := i + 1
+
+			lf.Insert(int64(i), int64(i*10), false)
+
+			currentTxn.Store(int32(txnID))
+
+			if i%5 == 0 {
+				runtime.Gosched()
+			}
+		}
+	}()
+
+	chaosWg.Wait()
 }
