@@ -74,7 +74,7 @@ type SkipList struct {
 	heightLimit      int
 }
 
-func NewSkipList(limit int) *SkipList {
+func NewLockFreeSkipList(limit int) *SkipList {
 
 	if limit < 5 { // minimum height of the skip list should be 5 atleast
 		return nil
@@ -91,7 +91,7 @@ func NewSkipList(limit int) *SkipList {
 	}
 
 	var s1 atomic.Int64
-	s1.Store(0) // stgart with version 0
+	s1.Store(0) // start with version 0
 
 	var x atomic.Int32
 	x.Store(1)
@@ -241,7 +241,7 @@ func (s *SkipList) Delete(key int64) (success bool, status int) {
 	return false, 0
 }
 
-// APIs fpr testing purposes
+/*  APIs for testing purposes  */
 func (s *SkipList) SeekTest(key int64) (node *SkipListNode, txnno int64) {
 	// returns a pointer to a node with the same key and latest possible versionNumber, else nil
 
@@ -272,6 +272,34 @@ func (s *SkipList) SeekTest(key int64) (node *SkipListNode, txnno int64) {
 	return nil, compositeTargetKey.versionNumber
 }
 
+func (s *SkipList) SeekVersion(key int64, txnno int64) (node *SkipListNode) {
+	currentPointer := s.start // reads start, since start's pointer never changes we need not to use atomic here
+	var candidate *SkipListNode
+	compositeTargetKey := CompositeKey{
+		Key:           key,
+		versionNumber: int64(txnno),
+	}
+
+	for level := s.currentMaxHeight.Load() - 1; level >= 0; level-- {
+		nextPointer := currentPointer.pointerArray[level].Load() // atomically load the forward pointer of current node for this level
+
+		for nextPointer != s.end && (nextPointer.NodeKey.LessThan(&compositeTargetKey)) { // if we are not at end and the current next node is not a future node
+			currentPointer = nextPointer
+			nextPointer = currentPointer.pointerArray[level].Load()
+		}
+		// at level 0 when we arrive at this point means that we found the largest node which is less than compositeTargetKey, so the possible candidate is it's first child on level 0
+		candidate = nextPointer
+	}
+
+	if candidate != s.end && candidate.NodeKey.Key == key {
+		if !candidate.Tombstone {
+			return candidate
+		}
+	}
+
+	return nil
+}
+
 func (s *SkipList) TestSnapshotReadIdempotence(key int64) (resArray []*SkipListNode, txnno int64) {
 
 	var resultArray []*SkipListNode
@@ -279,7 +307,7 @@ func (s *SkipList) TestSnapshotReadIdempotence(key int64) (resArray []*SkipListN
 	dbVersion := s.currentVersion.Load()
 
 	for range 100 {
-		time.Sleep(100 * time.Microsecond) // sleep for 0.1 millisecond in between each read
+		time.Sleep(1 * time.Millisecond) // sleep for 0.1 millisecond in between each read
 		currentPointer := s.start
 		var candidate *SkipListNode
 		compositeTargetKey := CompositeKey{
